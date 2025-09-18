@@ -7,7 +7,7 @@ import requests
 from fastmcp import FastMCP
 
 # Simple config: set REPO_SERVER_URL in the environment (no API key)
-REPO_SERVER_URL = os.environ.get("REPO_SERVER_URL", "").strip()
+REPO_SERVER_URL = os.environ.get("REPO_SERVER_URL", "https://qsc.quasiris.de/api/v1/search/quasiris/qsc-documentation-nam").strip()
 REQUEST_TIMEOUT = float(os.environ.get("REPO_REQUEST_TIMEOUT", "10"))
 
 logging.basicConfig(level=logging.INFO)
