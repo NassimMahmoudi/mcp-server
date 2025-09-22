@@ -20,35 +20,6 @@ REPO_SERVER_URL = os.environ.get("REPO_SERVER_URL", "https://qsc.quasiris.de/api
 REQUEST_TIMEOUT = float(os.environ.get("REPO_REQUEST_TIMEOUT", "10"))
 
 
-def _ensure_content_in_document_obj(doc_obj):
-    """
-    If doc_obj contains a 'text' (string or list) or nested 'document' with 'text',
-    ensure the corresponding 'content' field exists by concatenating text if needed.
-    This mutates doc_obj in-place and does nothing else.
-    """
-    if not isinstance(doc_obj, dict):
-        return
-
-    # nested 'document' preferred
-    nested = doc_obj.get("document")
-    if isinstance(nested, dict):
-        if not nested.get("content"):
-            raw = nested.get("text")
-            if isinstance(raw, list):
-                nested["content"] = "\n".join([str(s) for s in raw if s is not None])
-            else:
-                nested["content"] = str(raw or "")
-        return
-
-    # top-level
-    if not doc_obj.get("content"):
-        raw = doc_obj.get("text")
-        if isinstance(raw, list):
-            doc_obj["content"] = "\n".join([str(s) for s in raw if s is not None])
-        else:
-            doc_obj["content"] = str(raw or "")
-
-
 def fetch_documents(query: str, limit: int = 20):
     """
     Call the fetch endpoint and return its full payload, but ensure each document
@@ -64,30 +35,6 @@ def fetch_documents(query: str, limit: int = 20):
     except Exception as e:
         logger.exception("Error fetching docs from repo search: %s", e)
         return {}
-
-    # If payload has result -> services -> documents
-    if isinstance(payload, dict) and isinstance(payload.get("result"), dict):
-        for svc in payload["result"].values():
-            if not isinstance(svc, dict):
-                continue
-            docs = svc.get("documents", []) or []
-            for d in docs:
-                if isinstance(d, dict):
-                    _ensure_content_in_document_obj(d)
-
-    # If payload has top-level 'documents'
-    elif isinstance(payload, dict) and isinstance(payload.get("documents"), list):
-        for d in payload["documents"]:
-            if isinstance(d, dict):
-                _ensure_content_in_document_obj(d)
-
-    # If payload is a plain list of docs
-    elif isinstance(payload, list):
-        for item in payload:
-            if isinstance(item, dict):
-                _ensure_content_in_document_obj(item)
-
-    # else: leave payload untouched
 
     return payload
 
