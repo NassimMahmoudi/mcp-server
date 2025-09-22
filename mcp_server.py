@@ -24,7 +24,7 @@ def fetch_documents(query: str, limit: int = 20):
     """
     Call the fetch endpoint and return its full payload, but ensure each document
     (either in result->...->documents or payload['documents'] or top-level list)
-    has a 'content' field created from 'text' when needed.
+    has a 'text' field.
     """
     logger.info("fetch_documents called q=%r limit=%s", query, limit)
 
