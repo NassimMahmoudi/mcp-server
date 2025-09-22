@@ -20,17 +20,42 @@ REPO_SERVER_URL = os.environ.get("REPO_SERVER_URL", "https://qsc.quasiris.de/api
 REQUEST_TIMEOUT = float(os.environ.get("REPO_REQUEST_TIMEOUT", "10"))
 
 
-def fetch_documents(query: str, limit: int = 20) -> List[Dict[str, Any]]:
+def _ensure_content_in_document_obj(doc_obj):
     """
-    Fetch documents from a repository search API.
-    Expects REPO_SERVER_URL to be set. Returns a list of dicts:
-      id, title, url, content_type, content, meta
+    If doc_obj contains a 'text' (string or list) or nested 'document' with 'text',
+    ensure the corresponding 'content' field exists by concatenating text if needed.
+    This mutates doc_obj in-place and does nothing else.
+    """
+    if not isinstance(doc_obj, dict):
+        return
+
+    # nested 'document' preferred
+    nested = doc_obj.get("document")
+    if isinstance(nested, dict):
+        if not nested.get("content"):
+            raw = nested.get("text")
+            if isinstance(raw, list):
+                nested["content"] = "\n".join([str(s) for s in raw if s is not None])
+            else:
+                nested["content"] = str(raw or "")
+        return
+
+    # top-level
+    if not doc_obj.get("content"):
+        raw = doc_obj.get("text")
+        if isinstance(raw, list):
+            doc_obj["content"] = "\n".join([str(s) for s in raw if s is not None])
+        else:
+            doc_obj["content"] = str(raw or "")
+
+
+def fetch_documents(query: str, limit: int = 20):
+    """
+    Call the fetch endpoint and return its full payload, but ensure each document
+    (either in result->...->documents or payload['documents'] or top-level list)
+    has a 'content' field created from 'text' when needed.
     """
     logger.info("fetch_documents called q=%r limit=%s", query, limit)
-
-    if not REPO_SERVER_URL:
-        logger.error("REPO_SERVER_URL not set — fetch_documents will return []")
-        return []
 
     try:
         r = requests.get(REPO_SERVER_URL, params={"q": query, "limit": limit}, timeout=REQUEST_TIMEOUT)
@@ -38,87 +63,35 @@ def fetch_documents(query: str, limit: int = 20) -> List[Dict[str, Any]]:
         payload = r.json()
     except Exception as e:
         logger.exception("Error fetching docs from repo search: %s", e)
-        return []
+        return {}
 
-    documents: List[Dict[str, Any]] = []
-
-    # Case 1: payload has {"result": { service: { "documents": [...] } } }
-    if isinstance(payload, dict) and "result" in payload and isinstance(payload["result"], dict):
-        result_obj = payload["result"]
-        for svc_val in result_obj.values():
-            if not isinstance(svc_val, dict):
+    # If payload has result -> services -> documents
+    if isinstance(payload, dict) and isinstance(payload.get("result"), dict):
+        for svc in payload["result"].values():
+            if not isinstance(svc, dict):
                 continue
-            docs = svc_val.get("documents", []) or []
+            docs = svc.get("documents", []) or []
             for d in docs:
-                doc_data = (d.get("document") or {}) if isinstance(d, dict) else {}
-                raw_text = doc_data.get("text", [])
-                if isinstance(raw_text, list):
-                    content = "\n".join([str(s) for s in raw_text if s is not None])
-                else:
-                    content = str(raw_text or "")
-                doc_item = {
-                    "id": d.get("id") or doc_data.get("id") or "",
-                    "title": doc_data.get("title") or doc_data.get("url") or "",
-                    "url": doc_data.get("url") or "",
-                    "content_type": doc_data.get("content_type") or "text/markdown",
-                    "content": content,
-                    "meta": {"position": d.get("position"), "fieldCount": d.get("fieldCount")}
-                }
-                documents.append(doc_item)
+                if isinstance(d, dict):
+                    _ensure_content_in_document_obj(d)
 
-    # Case 2: payload is {"documents": [...]}
-    elif isinstance(payload, dict) and "documents" in payload and isinstance(payload["documents"], list):
+    # If payload has top-level 'documents'
+    elif isinstance(payload, dict) and isinstance(payload.get("documents"), list):
         for d in payload["documents"]:
-            if not isinstance(d, dict):
-                continue
-            doc_data = d.get("document") or d
-            raw_text = doc_data.get("text", []) if isinstance(doc_data, dict) else ""
-            if isinstance(raw_text, list):
-                content = "\n".join([str(s) for s in raw_text if s is not None])
-            else:
-                content = str(raw_text or doc_data.get("content", "") if isinstance(doc_data, dict) else "")
-            doc_item = {
-                "id": d.get("id") or (doc_data.get("id") if isinstance(doc_data, dict) else ""),
-                "title": (doc_data.get("title") if isinstance(doc_data, dict) else "") or "",
-                "url": doc_data.get("url") if isinstance(doc_data, dict) else "",
-                "content_type": doc_data.get("content_type") if isinstance(doc_data, dict) else "text/markdown",
-                "content": content,
-                "meta": {"position": d.get("position"), "fieldCount": d.get("fieldCount")}
-            }
-            documents.append(doc_item)
+            if isinstance(d, dict):
+                _ensure_content_in_document_obj(d)
 
-    # Case 3: payload is a list of document-like dicts
+    # If payload is a plain list of docs
     elif isinstance(payload, list):
         for item in payload:
-            if not isinstance(item, dict):
-                continue
-            content = ""
-            if "content" in item and item.get("content") is not None:
-                content = str(item.get("content"))
-            elif "text" in item and item.get("text") is not None:
-                raw_text = item.get("text")
-                if isinstance(raw_text, list):
-                    content = "\n".join([str(s) for s in raw_text if s is not None])
-                else:
-                    content = str(raw_text)
-            doc_item = {
-                "id": item.get("id", ""),
-                "title": item.get("title", ""),
-                "url": item.get("url", ""),
-                "content_type": item.get("content_type", "text/markdown"),
-                "content": content,
-                "meta": {"position": item.get("position"), "fieldCount": item.get("fieldCount")}
-            }
-            documents.append(doc_item)
+            if isinstance(item, dict):
+                _ensure_content_in_document_obj(item)
 
-    else:
-        logger.warning("Unexpected repo response shape; returning empty list")
+    # else: leave payload untouched
 
-    logger.info("fetch_documents returning %d documents", len(documents))
-    return documents[:limit]
+    return payload
 
-
-# Expose the MCP tool
+# Search MCP tool
 @mcp.tool(name="search_documents_tool")
 async def search_documents_tool(query: str, limit: int = 20):
     """
